@@ -1,0 +1,37 @@
+{
+  "cena": "C:\\Users\\asus\\Desktop\\Universidade\\MEM\\2\u00baano\\Savi\\SAVI_TPr\u00e1tico\\test\\cena_5",
+  "imagens": [
+    "000"
+  ],
+  "T_camera0_camera": [
+    [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  ],
+  "camaras_registadas": [
+    true
+  ]
+}

@@ -1,0 +1,32 @@
+# Comandos do dia do teste (PowerShell, na pasta principal do trabalho)
+# O professor publica cada teste no origin/main com um commit "repositório limpo" (só cenas_teste/ e
+# ENUNCIADO_TESTE.md). Por isso o merge usa "-s ours": fica com o NOSSO código e depois vai-se buscar só
+# as cenas e o enunciado do teste. ATENÇÃO: "-s ours" ignora TUDO o que estiver no origin/main, incluindo
+# commits de código de um colega; se alguém tiver feito push de código, fazer primeiro um merge normal.
+
+# 0. Número do teste (só para as mensagens dos commits)
+$teste = 17
+
+# 1. Guardar o trabalho que ainda não está em commit (se não houver nada, o commit só avisa "nothing to commit")
+git switch main
+git add savi run_test.py Read_me
+git commit -m "Código antes do teste $teste"
+
+# 2. Ir buscar o teste e juntá-lo, ficando com o nosso código
+git fetch origin
+git merge -s ours origin/main -m "Junta o teste $teste"
+git rm -r -q --ignore-unmatch cenas_teste ENUNCIADO_TESTE.md results_test
+git checkout origin/main -- cenas_teste ENUNCIADO_TESTE.md
+
+# 3. Pôr as cenas em test/ e correr o programa (pede o número real de caixas no fim de cada cena)
+Remove-Item -Recurse -Force test -ErrorAction SilentlyContinue
+Copy-Item -Recurse cenas_teste test
+python run_test.py
+
+# 4. Enviar o código, o Read_me e os resultados (results_test/<cena>/result.json)
+git add savi run_test.py Read_me results_test cenas_teste ENUNCIADO_TESTE.md
+git commit -m "Resultados do teste $teste"
+git push origin main
+
+# Ver a nuvem dos objetos de cada cena (Parte 2), uma janela de cada vez
+python -c "import glob, open3d as o3d; [o3d.visualization.draw_geometries([o3d.io.read_point_cloud(f)], window_name=f) for f in sorted(glob.glob('test/*/partes/objetos.ply'))]"
