@@ -28,5 +28,8 @@ git add savi run_test.py Read_me results_test cenas_teste ENUNCIADO_TESTE.md
 git commit -m "Resultados do teste $teste"
 git push origin main
 
-# Ver a nuvem dos objetos de cada cena (Parte 2), uma janela de cada vez
-python -c "import glob, open3d as o3d; [o3d.visualization.draw_geometries([o3d.io.read_point_cloud(f)], window_name=f) for f in sorted(glob.glob('test/*/partes/objetos.ply'))]"
+# Ver novamente janelas interpretador
+python run_test.py --ver cena_1
+
+# Ver novamente janelas avaliador
+python savi/avaliador.py --scene test/cena_1 --result results_test/cena_1/result.json --ver
