@@ -13,6 +13,10 @@ Erro de cada câmara: E = T_gt⁻¹ · T_est; translação = norma da translaç�
 | câmara | erro de translação (mm) | erro de rotação (°) |
 |---|---|---|
 | 000 | 0.00 | 0.000 |
+| 001 | 1.90 | 0.037 |
+| 002 | 1.48 | 0.035 |
+| média (sem a 000) | 1.69 | 0.036 |
+| máximo | 1.90 | 0.037 |
 
 ## Parte 2 - Segmentação
 
@@ -22,8 +26,8 @@ Caixas encontradas: 1, reais: 1 (1 conjuntos de pontos).
 
 | caixa verdadeira | conjunto | pontos do conjunto | precisão | recall |
 |---|---|---|---|---|
-| 0 | 0 | 4133 | 0.998 | 0.802 |
-| média | | | 0.998 | 0.802 |
+| 0 | 0 | 10046 | 0.992 | 0.683 |
+| média | | | 0.992 | 0.683 |
 
 ## Parte 3 - Caixas
 
@@ -33,23 +37,36 @@ Erros de cada caixa verdadeira em relação à caixa estimada associada (maior I
 
 | caixa verdadeira | caixa estimada | posição (mm) | altura z (mm) | yaw (°) | dL (mm) | dW (mm) | dH (mm) | IoU 3D |
 |---|---|---|---|---|---|---|---|---|
-| 0 | 0 | 0.2 | 0.0 | 0.12 | -0.5 | -0.7 | -0.1 | 0.991 |
+| 0 | 0 | 0.8 | -0.0 | 0.16 | -1.4 | -1.1 | -0.3 | 0.985 |
 
-IoU 3D médio: **0.991** (uma caixa verdadeira sem caixa estimada conta com IoU 0).
+IoU 3D médio: **0.985** (uma caixa verdadeira sem caixa estimada conta com IoU 0).
 
 ### bounding box (partes/ajuste.npz)
 
 | caixa verdadeira | caixa estimada | posição (mm) | altura z (mm) | yaw (°) | dL (mm) | dW (mm) | dH (mm) | IoU 3D |
 |---|---|---|---|---|---|---|---|---|
-| 0 | 0 | 7.5 | 0.0 | 0.99 | -4.2 | -1.9 | 3.0 | 0.863 |
+| 0 | 0 | 4.9 | -0.0 | 0.24 | -0.4 | 5.2 | 2.8 | 0.911 |
 
-IoU 3D médio: **0.863** (uma caixa verdadeira sem caixa estimada conta com IoU 0).
+IoU 3D médio: **0.911** (uma caixa verdadeira sem caixa estimada conta com IoU 0).
 
 
 ## Extra - Fotometria
 
-cor_000 = s · cor + b de cada imagem:
+cor_000 = s · cor + b de cada imagem, em relação à imagem 000 (o verdadeiro vem do campo `photometry` do ground truth: s = s_000 / s_k, b = b_000 − s_000 · b_k / s_k):
 
-| imagem | s estimado | s verdadeiro | b estimado | b verdadeiro |
-|---|---|---|---|---|
-| 000 | 1.000 | 1.000 | +0.000 | +0.000 |
+| imagem | s estimado | s verdadeiro | erro de s | b estimado | b verdadeiro | erro de b |
+|---|---|---|---|---|---|---|
+| 000 | 1.000 | 1.000 | 0.000 | +0.000 | +0.000 | 0.000 |
+| 001 | 1.164 | 1.168 | 0.004 | +0.139 | +0.137 | 0.001 |
+| 002 | 0.807 | 0.808 | 0.001 | +0.109 | +0.108 | 0.001 |
+| média (sem a 000) | | | 0.003 | | | 0.001 |
+
+### Efeito na segmentação por cor (Nível 4)
+
+A Parte 2 correu três vezes sobre a nuvem junta com as poses verdadeiras (em `partes_gt_fotometria/`), com as cores sem correção, com a correção estimada e com a correção verdadeira. Erro de cor = diferença média de cor (0 a 1) entre os pontos vistos por duas câmaras. Os conjuntos de pontos são só os da Parte 2 (clusters e grupos de cor, sem a geometria da Parte 3).
+
+| cores | erro de cor | caixas estimadas | clusters separados por cor | conjuntos | precisão | recall | caixas sem conjunto |
+|---|---|---|---|---|---|---|---|
+| sem correção | 0.1533 | 1 de 1 | 0 de 1 | 1 | 0.992 | 0.683 | 0 |
+| s e b estimados | 0.0146 | 1 de 1 | 0 de 1 | 1 | 0.992 | 0.682 | 0 |
+| s e b verdadeiros | 0.0147 | 1 de 1 | 0 de 1 | 1 | 0.992 | 0.682 | 0 |

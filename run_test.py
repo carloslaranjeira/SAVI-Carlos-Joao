@@ -8,14 +8,17 @@ Utilização:
     python run_test.py --redo       # volta a correr cenas que já têm resultado
     python run_test.py --sem_janelas   # não abre janelas
     python run_test.py --ver cena_1    # volta a abrir as janelas de uma cena já feita (não recalcula nada)
+    python run_test.py --sem_readme    # não reescreve a secção dos resultados do README.md
 
 Corre as cenas UMA DE CADA VEZ: em cada cena, os 4 ficheiros (savi/) um depois do outro e o avaliador,
 e no fim mostra a janela da cena; só depois passa à cena seguinte:
     parte1_registo.py      -> results_test/<cena>/partes/registo.json   (pose de cada câmara)
-    extra_fotometria.py    -> results_test/<cena>/partes/fotometria.json (exposição de cada imagem)
+    extra_fotometria.py    -> results_test/<cena>/partes/fotometria.json e fotometria/ (s e b, imagens corrigidas)
     parte2_segmentacao.py  -> results_test/<cena>/partes/objetos.ply, mesa.json, segmentacao.npz
     parte3_ajuste.py       -> results_test/<cena>/result.json (e top_view.png)
     avaliador.py           -> número de caixas e, se a cena tiver ground truth, results_test/<cena>/avaliacao.md
+No fim de todas as cenas, savi/resultados_readme.py reescreve a secção "Resultados do teste" do
+README.md (tabelas de erros e figuras em docs/teste/) com os resultados de TODAS as cenas de results_test/.
 As 4 partes NÃO usam o número de caixas (a Parte 2 estima-o). O número real só é pedido no avaliador,
 no fim de cada cena, para o comparar com o número de caixas encontradas; o de uma cena que esteja em
 test/num_boxes.json não é perguntado. A pasta test/ só é lida: tudo o que o programa grava fica em
@@ -206,11 +209,13 @@ def run_scene(scene, output, views, show, known, push=False):
     # pasta: r1["folder"]; a pasta da cena em test/ só é lida)
     r1 = parte1.run_registration(scene, output / scene.name / comum.OUTPUT_FOLDER)
     collect(views, lambda: parte1.figure_data(r1), "parte1_registo")
-    # Extra: fotometria -> results_test/<cena>/partes/fotometria.json (um erro aqui não impede o resto; as vistas
-    # ficam para o fim, depois das da Parte 3)
-    rx = None
+    # Extra: fotometria -> results_test/<cena>/partes/fotometria.json e fotometria/. Corrige as imagens e volta
+    # a colorir as nuvens (r1["scene"] e r1["cloud"]): a Parte 2 já segmenta a nuvem corrigida. As vistas
+    # ficam logo a seguir às da Parte 1, pela ordem em que as partes correm. Um erro aqui não impede o resto
+    # (a Parte 2 usa então as cores originais).
     try:
         rx = extra.run_photometry(r1)
+        collect(views, lambda: extra.figure_data(r1, rx), "extra_fotometria")
     except Exception:
         traceback.print_exc()
         print(f"  ERRO na fotometria da cena {scene.name} (não impede o resto)")
@@ -228,8 +233,6 @@ def run_scene(scene, output, views, show, known, push=False):
     except Exception as error:
         print(f"  (figura não gravada: {error})")
     collect(views, lambda: parte3.figure_data(r1, r2, r3), "parte3_ajuste")
-    if rx is not None:
-        collect(views, lambda: extra.figure_data(r1, rx), "extra_fotometria")
     if push:
         git_push(output, f"Resultado da cena {scene.name}")
     show()                                      # janela da cena (as 4 partes já acabaram)
@@ -249,8 +252,8 @@ def saved_views(scene_name, output):
     """Vistas de uma cena JÁ FEITA, só com o que ficou gravado em results_test/<cena>/ (registo, fotometria,
     segmentação, ajuste e result.json): não volta a correr nenhuma parte nem o avaliador.
     Só a nuvem agregada é juntada outra vez (com as poses gravadas no registo.json: é rápido).
-    Saída: lista de (figure_data, parte), pela mesma ordem do run_scene (Partes 1, 2 e 3, fotometria e,
-    se a cena tiver ground truth, o avaliador).
+    Saída: lista de (figure_data, parte), pela mesma ordem do run_scene (Parte 1, fotometria, Partes 2 e 3
+    e, se a cena tiver ground truth, o avaliador).
     """
     import avaliador
     import comum
@@ -263,7 +266,8 @@ def saved_views(scene_name, output):
     if not (parts / parte1.REGISTRATION_FILE).exists():
         raise SystemExit(f"{scene_name}: não há resultados em {parts} (corra primeiro o run_test.py)")
     r1 = parte1.load_registration(parts)
-    r1["scene"] = comum.load_scene(r1["scene_folder"])
+    # a cena com as imagens e as nuvens corrigidas pelo extra (se correu), como a Parte 2 a usou
+    r1["scene"] = extra.load_corrected_scene(comum.load_scene(r1["scene_folder"]), parts)
     r1["cloud"], r1["camera_index"] = parte1.aggregate(r1["scene"], r1["T_cams"], r1["registered"])
     table, points, colors = parte2.load_objects(parts)
     seg = parte2.load_segmentation(parts)
@@ -273,11 +277,11 @@ def saved_views(scene_name, output):
     r3 = parte3.load_fit(parts)
     views = []
     collect(views, lambda: parte1.figure_data(r1), "parte1_registo")
+    if (parts / extra.PHOTOMETRY_FILE).exists():
+        rx = json.loads((parts / extra.PHOTOMETRY_FILE).read_text(encoding="utf-8"))
+        collect(views, lambda: extra.figure_data(r1, rx), "extra_fotometria")
     collect(views, lambda: parte2.figure_data(r1, r2), "parte2_segmentacao")
     collect(views, lambda: parte3.figure_data(r1, r2, r3), "parte3_ajuste")
-    if (parts / extra.PHOTOMETRY_FILE).exists():
-        rx = {"photometry": json.loads((parts / extra.PHOTOMETRY_FILE).read_text(encoding="utf-8"))}
-        collect(views, lambda: extra.figure_data(r1, rx), "extra_fotometria")
     result_path = Path(output) / scene_name / "result.json"
     if result_path.exists():
         collect(views, lambda: avaliador.scene_figure_data(r1["scene_folder"], result_path), "avaliador")
@@ -325,6 +329,18 @@ def open_windows(folder, parent_pid):
 # #####################################################################################################
 # PROGRAMA PRINCIPAL
 # #####################################################################################################
+def update_readme(output, scenes_dir):
+    """Reescreve a secção "Resultados do teste" do README.md com as cenas de results_test/ (um erro
+    aqui não afeta os resultados, que já estão gravados)."""
+    print("\nA reescrever a secção dos resultados do README.md (figuras em docs/teste/)...")
+    try:
+        import resultados_readme
+        resultados_readme.update_readme(output, scenes_dir)
+    except Exception:
+        traceback.print_exc()
+        print("  ERRO ao reescrever o README (os resultados das cenas não são afetados)")
+
+
 def main_test():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scenes", default=str(FOLDER / "test"), help="pasta com as cenas")
@@ -333,6 +349,8 @@ def main_test():
     parser.add_argument("--redo", action="store_true", help="volta a correr cenas que já têm resultado")
     parser.add_argument("--download", metavar="URL", help="copia primeiro as cenas deste repositório GitHub para --scenes")
     parser.add_argument("--sem_janelas", action="store_true", help="não abre janelas")
+    parser.add_argument("--sem_readme", action="store_true",
+                        help="não reescreve a secção dos resultados do README.md no fim")
     parser.add_argument("--ver", nargs="+", metavar="CENA",
                         help="só volta a abrir as janelas destas cenas já feitas (não recalcula nada)")
     parser.add_argument("--janelas", help=argparse.SUPPRESS)       # uso interno: processo das janelas
@@ -369,6 +387,8 @@ def main_test():
         if s not in todo:
             print(f"{s.name}: já tem resultado, saltada")
     if not todo:
+        if not args.sem_readme:
+            update_readme(output, scenes_dir)
         return
     start = time.time()
     failed, done = [], []
@@ -400,6 +420,8 @@ def main_test():
 
     print(f"\nTerminado em {(time.time() - start) / 60:.1f} min. "
           f"Feitas: {len(done)}  Com erro: {failed if failed else 'nenhuma'}")
+    if not args.sem_readme:
+        update_readme(output, scenes_dir)
     if windows is not None:
         windows.finish()
         print(f"As janelas continuam abertas até serem fechadas (erros das janelas em {windows.log_path})")

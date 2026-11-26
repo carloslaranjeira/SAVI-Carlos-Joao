@@ -16,7 +16,7 @@ mesa.json (pose e dimensões da mesa) e segmentacao.npz (cluster e grupo de cor 
 
 Ordem das partes (o run_test.py corre-as todas, cena a cena):
     parte1_registo.py      -> <cena>/partes/registo.json   (pose de cada câmara)
-    extra_fotometria.py    -> <cena>/partes/fotometria.json (ganho e desvio de cada imagem)
+    extra_fotometria.py    -> <cena>/partes/fotometria.json e fotometria/ (s e b, imagens corrigidas)
     parte2_segmentacao.py  -> <cena>/partes/objetos.ply, mesa.json, segmentacao.npz (estima o n.º de caixas)
     parte3_ajuste.py       -> result.json e <cena>/partes/ajuste.npz
     avaliador.py           -> pede o n.º real de caixas e compara com o ground truth (se a cena o tiver)
@@ -51,6 +51,7 @@ from scipy.spatial import cKDTree            # procura rápida do vizinho mais p
 from comum import (  # geometria e leitura da cena (comuns a todas as partes)
     box_corners_2d, load_scene, make_T, OUTPUT_FOLDER, transform_points,
 )
+from extra_fotometria import load_corrected_scene   # EXTRA: cores das imagens com a exposição corrigida
 from parte1_registo import (  # funções da Parte 1 usadas aqui
     aggregate, load_registration,
 )
@@ -79,6 +80,10 @@ LATERAL_STEP = 0.005         # 5. m: salto do centro do topo (desvio lateral) qu
                              #    apareciam juntas falsas)
 WIDTH_STEP = 0.015           # 5. m: salto da largura do topo (larguras diferentes) que marca uma junta
 MIN_BOX_SIDE = 0.05          # 5. m: lado mínimo de uma caixa (juntas mais próximas do que isto são a mesma)
+MIN_COLOR_FRACTION = 0.10    # 5. fração dos pontos do cluster a partir da qual uma cor conta sempre como caixa
+COMPACT_COLOR_FRACTION = 0.8 # 5. uma cor com 5% a 10% dos pontos só conta se pelo menos 80% deles formarem uma
+                             #    mancha ligada (uma caixa pequena: 0.94; pontos espalhados de cores próximas
+                             #    ou de reflexos: 0.35 a 0.73)
 
 
 @dataclass
@@ -550,16 +555,46 @@ def count_top_levels(points, min_points=30):
     return 1 + int(np.sum(np.diff(heights) > 0.015))
 
 
-def count_colors(colors, max_k=4, min_fraction=0.10):
+def compact_group(points, min_fraction=COMPACT_COLOR_FRACTION, min_side=MIN_BOX_SIDE):
+    """True se os pontos de um grupo de cor formam UMA mancha com o tamanho de uma caixa.
+
+    DBSCAN com raio de 1 cm: a maior componente ligada tem de ter pelo menos min_fraction dos pontos, e a
+    sua pegada no plano da mesa (percentis 5 e 95 nos dois eixos principais, PCA) tem de ter os dois lados
+    com pelo menos min_side. Uma caixa pequena é uma mancha compacta; os pontos de outra tonalidade numa
+    caixa (reflexos, bordas misturadas com o fundo, faces de cores próximas) ficam espalhados pelo cluster.
+    """
+    if len(points) < 50:
+        return False
+    labels = np.array(o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points)).cluster_dbscan(0.01, 10))
+    if labels.max() < 0:
+        return False
+    sizes = np.bincount(labels[labels >= 0])
+    if sizes.max() / len(points) < min_fraction:
+        return False
+    xy = points[labels == sizes.argmax(), :2]
+    xy = xy - xy.mean(axis=0)
+    _, _, Vt = np.linalg.svd(xy, full_matrices=False)
+    sides = [np.ptp(np.percentile(xy @ axis, [5, 95])) for axis in Vt]
+    return min(sides) >= min_side
+
+
+def count_colors(colors, points=None, max_k=4, min_fraction=MIN_COLOR_FRACTION):
     """Número de cores diferentes num cluster (1 a max_k): o maior k em que color_split separa as cores.
 
-    Para CONTAR caixas, cada cor tem de ter pelo menos 10% dos pontos (mais exigente do que os 5% de
-    color_split): numa caixa sozinha, um pequeno grupo de pontos de outra tonalidade (reflexos, bordas
-    misturadas com o fundo) não pode passar a contar como mais uma caixa.
+    Para CONTAR caixas, uma cor com pelo menos 10% dos pontos conta sempre. Uma cor com 5% a 10% (o mínimo
+    de color_split é 5%) só conta se os seus pontos formarem uma mancha compacta do tamanho de uma caixa
+    (compact_group): numa caixa sozinha, um pequeno grupo de pontos de outra tonalidade (reflexos, bordas
+    misturadas com o fundo) não pode passar a contar como mais uma caixa, mas uma caixa pequena e meio
+    tapada por outra (teste 22, cena_2: a caixa laranja tinha só 9.2% dos pontos) tem de contar.
+    Sem os pontos (points=None), fica só a regra dos 10%.
     """
     for k in range(max_k, 1, -1):
         labels = color_split(colors, k)
-        if labels is not None and np.bincount(labels, minlength=k).min() / len(labels) >= min_fraction:
+        if labels is None:
+            continue
+        fractions = np.bincount(labels, minlength=k) / len(labels)
+        small = np.nonzero(fractions < min_fraction)[0]
+        if len(small) == 0 or (points is not None and all(compact_group(points[labels == g]) for g in small)):
             return k
     return 1
 
@@ -691,7 +726,7 @@ def estimate_boxes(points, colors, clusters, use_color=True):
         levels = count_top_levels(points[mine])
         n = levels
         if use_color:
-            n = max(n, count_colors(colors[mine]))
+            n = max(n, count_colors(colors[mine], points[mine]))
         orientations = wall_orientations(points[mine])
         n = max(n, len(orientations))
         if levels == 1 and len(orientations) <= 1:
@@ -787,7 +822,9 @@ def run_segmentation(r1, cloud=None, use_color=True, verbose=True):
     Saída: dicionário com a mesa, os pontos dos objetos, a segmentação e a nuvem agregada.
     """
     t0 = time.time()
-    scene = r1["scene"] if r1.get("scene") is not None else load_scene(r1["scene_folder"])
+    # A cena com as cores corrigidas pelo extra_fotometria.py (se já correu nesta cena)
+    scene = r1["scene"] if r1.get("scene") is not None else load_corrected_scene(load_scene(r1["scene_folder"]),
+                                                                                 r1["folder"])
     registered = r1["registered"]
     if cloud is None:
         cloud = r1.get("cloud")
